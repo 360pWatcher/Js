@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Mobile AR Particle System</title>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #000;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+        
+        /* The live camera feed */
+        #webcam {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            object-fit: cover; /* Ensures video fills screen without stretching */
+            z-index: 1;
+        }
+
+        /* The 3D Canvas sits on top of the video */
+        #canvas-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 2;
+        }
+
+        /* Permission Overlay for Mobile */
+        #start-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            text-align: center;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        button {
+            padding: 15px 30px;
+            font-size: 18px;
+            background-color: #00f0ff;
+            color: #000;
+            border: none;
+            border-radius: 30px;
+            font-weight: bold;
+            margin-top: 20px;
+            cursor: pointer;
+            box-shadow: 0 0 15px rgba(0, 240, 255, 0.5);
+        }
+    </style>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+            }
+        }
+    </script>
+</head>
+<body>
+    <!-- Live Video Background -->
+    <video id="webcam" autoplay playsinline muted></video>
+
+    <!-- 3D Scene Container -->
+    <div id="canvas-container"></div>
+
+    <!-- Mobile needs user interaction to start camera & gyroscope -->
+    <div id="start-overlay">
+        <h1>AR Particles</h1>
+        <p>This experience uses your camera and motion sensors.</p>
+        <button id="start-btn">Start Experience</button>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        let targetX = 0;
+        let targetY = 0;
+
+        // --- 1. SETUP THREE.JS ---
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+
+        // Camera setup
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
+        camera.position.z = 800;
+
+        // Renderer (Alpha: true is CRITICAL to see the video behind the 3D scene)
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setPixelRatio(window.devicePixelRatio);
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        container.appendChild(renderer.domElement);
+
+        // --- 2. CREATE GLOWING PARTICLES ---
+        const particlesCount = 8000; // Slightly reduced for mobile performance
+        const geometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(particlesCount * 3);
+        const colors = new Float32Array(particlesCount * 3);
+        const colorHelper = new THREE.Color();
+
+        for (let i = 0; i < particlesCount; i++) {
+            const r = 800 * Math.cbrt(Math.random()); 
+            const theta = Math.random() * 2 * Math.PI;
+            const phi = Math.acos(2 * Math.random() - 1);
+
+            positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+            positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+            positions[i * 3 + 2] = r * Math.cos(phi);
+
+            // Brighter colors to show up well against camera feed
+            const hue = 0.5 + (Math.random() * 0.4);
+            colorHelper.setHSL(hue, 1.0, 0.7); 
+            colors[i * 3] = colorHelper.r;
+            colors[i * 3 + 1] = colorHelper.g;
+            colors[i * 3 + 2] = colorHelper.b;
+        }
+
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+        // Procedural soft circle texture
+        const canvas = document.createElement('canvas');
+        canvas.width = 32; canvas.height = 32;
+        const context = canvas.getContext('2d');
+        const gradient = context.createRadialGradient(16, 16, 0, 16, 16, 16);
+        gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+        gradient.addColorStop(0.3, 'rgba(255, 255, 255, 0.8)');
+        gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        context.fillStyle = gradient;
+        context.fillRect(0, 0, 32, 32);
+        const particleTexture = new THREE.CanvasTexture(canvas);
+
+        const material = new THREE.PointsMaterial({
+            size: 15,
+            map: particleTexture,
+            vertexColors: true,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            transparent: true
+        });
+
+        const particleSystem = new THREE.Points(geometry, material);
+        scene.add(particleSystem);
+
+        // --- 3. ANIMATION LOOP ---
+        const clock = new THREE.Clock();
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const elapsedTime = clock.getElapsedTime();
+
+            // Idle rotation
+            particleSystem.rotation.y = elapsedTime * 0.05;
+
+            // Ease camera towards device tilt target
+            camera.position.x += (targetX - camera.position.x) * 0.05;
+            camera.position.y += (-targetY - camera.position.y) * 0.05;
+            camera.lookAt(scene.position);
+
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // --- 4. START AR & SENSORS (Triggered by Button) ---
+        document.getElementById('start-btn').addEventListener('click', async () => {
+            document.getElementById('start-overlay').style.display = 'none';
+
+            // 1. Request Phone Camera Stream
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment' } // Uses the back camera
+                });
+                const videoEl = document.getElementById('webcam');
+                videoEl.srcObject = stream;
+            } catch (err) {
+                console.warn("Camera access denied or unavailable.", err);
+            }
+
+            // 2. Request Gyroscope/Device Orientation (Required for iOS 13+)
+            if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+                try {
+                    const permission = await DeviceOrientationEvent.requestPermission();
+                    if (permission === 'granted') {
+                        window.addEventListener('deviceorientation', handleOrientation);
+                    }
+                } catch (err) {
+                    console.error("Gyroscope permission error", err);
+                }
+            } else {
+                // Android / Older devices
+                window.addEventListener('deviceorientation', handleOrientation);
+            }
+        });
+
+        // --- 5. HANDLE PHONE TILT ---
+        function handleOrientation(event) {
+            // gamma: Left to Right tilt (-90 to 90)
+            // beta: Front to Back tilt (-180 to 180)
+            let x = event.gamma || 0;
+            let y = event.beta || 0;
+
+            // Prevent flipping out when tilted too far
+            if (x > 90) x = 90;
+            if (x < -90) x = -90;
+
+            // Map tilt degrees to 3D space targets. 
+            // We subtract 45 from beta assuming you hold the phone at a 45-degree angle.
+            targetX = x * 10;
+            targetY = (y - 45) * 10; 
+        }
+
+        // --- 6. FALLBACK TOUCH CONTROLS (Swipe to move) ---
+        let isDragging = false;
+        let previousTouchX = 0;
+        let previousTouchY = 0;
+
+        document.addEventListener('touchstart', (e) => {
+            isDragging = true;
+            previousTouchX = e.touches[0].clientX;
+            previousTouchY = e.touches[0].clientY;
+        });
+
+        document.addEventListener('touchmove', (e) => {
+            if (!isDragging) return;
+            const touchX = e.touches[0].clientX;
+            const touchY = e.touches[0].clientY;
+            
+            targetX += (touchX - previousTouchX) * 2;
+            targetY += (touchY - previousTouchY) * 2;
+            
+            previousTouchX = touchX;
+            previousTouchY = touchY;
+        });
+
+        document.addEventListener('touchend', () => isDragging = false);
+
+        // --- 7. HANDLE RESIZE/ROTATION ---
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
